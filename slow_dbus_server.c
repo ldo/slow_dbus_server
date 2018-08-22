@@ -206,7 +206,10 @@ static DBusHandlerResult handle_message
   )
   {
     bool handled;
-    fprintf(stderr, "message received of type %d\n", dbus_message_get_type(message)); /* debug */
+    const char * const path = dbus_message_get_path(message);
+    const char * const interface = dbus_message_get_interface(message);
+    const char * const member = dbus_message_get_member(message);
+    fprintf(stderr, "message received of type %d, path %s, interface %s, member %s\n", dbus_message_get_type(message), path, interface, member); /* debug */
   /* more TBD */
     handled = true;
     return
