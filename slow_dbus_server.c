@@ -14,9 +14,11 @@
     what you will.
 */
 
+#include <stdbool.h>
 #include <time.h>
 #include <poll.h>
-#include <stdbool.h>
+#include <pthread.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -26,6 +28,8 @@
     Useful stuff
 */
 
+#define die() exit(2)
+
 static long get_milliseconds(void)
   {
     struct timespec now;
@@ -33,7 +37,7 @@ static long get_milliseconds(void)
     if (sts != 0)
       {
         perror("getting monotonic clock time");
-        exit(2);
+        die();
       } /*if*/
     return
         (long)now.tv_sec * 1000 + now.tv_nsec / 1000000;
@@ -48,9 +52,29 @@ static void check_dbus_error
     if (dbus_error_is_set(dberr))
       {
         fprintf(stderr, "libdbus error %s: %s\n", doing_what, dberr->message);
-        exit(2);
+        die();
       } /*if*/
   } /*check_dbus_error*/
+
+/*
+    Thread management
+*/
+
+static int
+    notify_send_pipe,
+    notify_receive_pipe;
+struct workqueue_entry
+  {
+    struct workqueue_entry * next;
+    DBusMessage * request;
+    int valtype;
+    unsigned long limit, result;
+  };
+static struct workqueue_entry
+    *finished = NULL,
+    *finished_last = NULL;
+static pthread_mutex_t
+    workqueue_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /*
     Event-loop handling
@@ -201,7 +225,7 @@ static void toggle_timeout
 
 static void handle_event(void)
   {
-    struct pollfd topoll[MAX_WATCHES];
+    struct pollfd topoll[MAX_WATCHES + 1];
     int total_timeout = -1; /* to begin with */
     for (int i = 0; i < nr_watches; ++i)
       {
@@ -222,6 +246,11 @@ static void handle_event(void)
               } /*if*/
           } /*if*/
       } /*for*/
+      {
+        struct pollfd * const entry = topoll + nr_watches;
+        entry->fd = notify_receive_pipe;
+        entry->events = POLLIN;
+      }
     for (int i = 0; i < nr_timeouts; ++i)
       {
         DBusTimeout * const timeout = timeouts[i];
@@ -237,12 +266,12 @@ static void handle_event(void)
     const long timeout_start = get_milliseconds();
     bool got_io;
       {
-        const int sts = poll(topoll, nr_watches, total_timeout);
+        const int sts = poll(topoll, nr_watches + 1, total_timeout);
         fprintf(stderr, "poll returned status %d\n", sts);
         if (sts < 0)
           {
             perror("doing poll");
-            exit(2);
+            die();
           } /*if*/
         got_io = sts > 0;
       }
@@ -261,10 +290,91 @@ static void handle_event(void)
             if (!ok)
               {
                 fprintf(stderr, "dbus_watch_handle failure\n");
-                exit(2);
+                die();
               } /*if*/
           } /*if*/
       } /*for*/
+      {
+        struct pollfd * const entry = topoll + nr_watches;
+        if ((entry->revents & POLLIN) != 0)
+          {
+            char dummy[20];
+            read(notify_receive_pipe, dummy, sizeof dummy);
+              {
+                const int sts = pthread_mutex_lock(&workqueue_mutex);
+                if (sts != 0)
+                  {
+                    perror("locking workqueue mutex to retrieve results");
+                  } /*if*/
+              }
+            for (;;)
+              {
+                struct workqueue_entry * const entry = finished;
+                if (entry == NULL)
+                  {
+                    finished_last = NULL;
+                    break;
+                  } /*if*/
+                finished = finished->next;
+                DBusMessage * const reply = dbus_message_new_method_return(entry->request);
+                if (reply == NULL)
+                  {
+                    fprintf(stderr, "failed to allocate D-Bus reply message\n");
+                    die();
+                  } /*if*/
+                  {
+                  /* return same type as was passed */
+                    unsigned char bresult;
+                    unsigned short wresult;
+                    unsigned int iresult;
+                    const void * argptr;
+                    switch (entry->valtype)
+                      {
+                    case DBUS_TYPE_BYTE:
+                        bresult = entry->result;
+                        argptr = &bresult;
+                    break;
+                    case DBUS_TYPE_UINT16:
+                        wresult = entry->result;
+                        argptr = &wresult;
+                    break;
+                    case DBUS_TYPE_UINT32:
+                        iresult = entry->result;
+                        argptr = &iresult;
+                    break;
+                    case DBUS_TYPE_UINT64:
+                        argptr = &entry->result;
+                    break;
+                    default:
+                        fprintf(stderr, "SHOULDN’T OCCUR: arg valtype = %d\n", entry->valtype);
+                        die();
+                    break;
+                      } /*switch*/
+                    const bool ok = dbus_message_append_args
+                      (
+                        reply,
+                        entry->valtype, argptr,
+                        DBUS_TYPE_INVALID /* marks end of args */
+                      );
+                    if (!ok)
+                      {
+                        fprintf(stderr, "dbus_message_append_args failure\n");
+                        die();
+                      } /*if*/
+                  }
+                  {
+                    const bool ok = dbus_connection_send(conn, reply, NULL);
+                    if (!ok)
+                      {
+                        fprintf(stderr, "dbus_message_send failure\n");
+                        die();
+                      } /*if*/
+                  }
+                free(entry);
+              } /*for*/
+            pthread_mutex_unlock(&workqueue_mutex);
+          } /*if*/
+      }
     const long interval = get_milliseconds() - timeout_start;
     for (int i = 0; i < nr_timeouts; ++i)
       {
@@ -282,13 +392,82 @@ static void handle_event(void)
             if (sts == DBUS_DISPATCH_NEED_MEMORY)
               {
                 fprintf(stderr, "dbus_connection_dispatch ran out of memory\n");
-                exit(2);
+                die();
               } /*if*/
             if (sts != DBUS_DISPATCH_DATA_REMAINS)
                 break;
           } /*for*/
       } /*if*/
   } /*handle_event*/
+
+/*
+    Slow Computation
+*/
+
+static void * compute_primes
+  (
+    void * data
+  )
+  {
+    struct workqueue_entry * const context = (struct workqueue_entry *)data;
+      {
+        const unsigned long limit = context->limit;
+        unsigned long result = 0;
+        unsigned long step = 1;
+        for (unsigned long i = 2;;)
+          {
+            if (i > limit)
+                break;
+            bool is_prime;
+            for (unsigned long j = 2;;)
+              {
+                if (i % j == 0)
+                  {
+                    is_prime = false;
+                    break;
+                  } /*if*/
+                if (i / j < j)
+                  {
+                    is_prime = true;
+                    break;
+                  } /*if*/
+                ++j;
+              } /*for*/
+            if (is_prime)
+              {
+                ++result;
+              } /*if*/
+            i += step;
+            step = 2;
+          } /*for*/
+        context->result = result;
+      }
+      {
+        const int sts = pthread_mutex_lock(&workqueue_mutex);
+        if (sts != 0)
+          {
+            perror("locking workqueue mutex to return result");
+          } /*if*/
+      }
+    context->next = NULL;
+    if (finished == NULL)
+      {
+        finished = context;
+        finished_last = context;
+      }
+    else
+      {
+        finished_last->next = context;
+        finished_last = context;
+      } /*if*/
+    pthread_mutex_unlock(&workqueue_mutex);
+      { /* wake up mainline */
+        unsigned char buf = 0;
+        write(notify_send_pipe, &buf, 1);
+      }
+    return
+        NULL;
+  } /*compute_primes*/
 
 /*
     Mainline
@@ -310,7 +489,8 @@ static DBusHandlerResult handle_message
     const char * const path = dbus_message_get_path(message);
     const char * const interface = dbus_message_get_interface(message);
     const char * const member = dbus_message_get_member(message);
-    fprintf(stderr, "message received of type %d, path %s, interface %s, member %s\n", dbus_message_get_type(message), path, interface, member); /* debug */
+    const char * const signature = dbus_message_get_signature(message);
+    fprintf(stderr, "message received of type %d, path %s, interface %s, member %s, signature %s\n", dbus_message_get_type(message), path, interface, member, signature); /* debug */
     if (dbus_message_get_type(message) == DBUS_MESSAGE_TYPE_METHOD_CALL && strcmp(interface, my_interface_name) == 0)
       {
         fprintf(stderr, "matches my interface\n");
@@ -319,6 +499,75 @@ static DBusHandlerResult handle_message
           {
             fprintf(stderr, "quit method received\n");
             quitting = true;
+          }
+        else if (strcmp(member, "count_primes") == 0)
+          {
+            if (strlen(signature) == 1)
+              {
+                unsigned long limit;
+                bool ok;
+                DBusError dberr;
+                dbus_error_init(&dberr);
+                if (signature[0] == DBUS_TYPE_BYTE)
+                  {
+                    unsigned char blimit;
+                    ok = dbus_message_get_args(message, &dberr, DBUS_TYPE_BYTE, &blimit);
+                    limit = blimit;
+                  }
+                else if (signature[0] == DBUS_TYPE_UINT16)
+                  {
+                    unsigned short wlimit;
+                    ok = dbus_message_get_args(message, &dberr, DBUS_TYPE_UINT16, &wlimit);
+                    limit = wlimit;
+                  }
+                else if (signature[0] == DBUS_TYPE_UINT32)
+                  {
+                    unsigned int ilimit;
+                    ok = dbus_message_get_args(message, &dberr, DBUS_TYPE_UINT32, &ilimit);
+                    limit = ilimit;
+                  }
+                else if (signature[0] == DBUS_TYPE_UINT64)
+                  {
+                    ok = dbus_message_get_args(message, &dberr, DBUS_TYPE_UINT64, &limit);
+                  }
+                else
+                  {
+                    handled = false;
+                  } /*if*/
+                if (handled)
+                  {
+                    struct workqueue_entry * context = (struct workqueue_entry *)malloc(sizeof(struct workqueue_entry));
+                    if (context == NULL)
+                      {
+                        fprintf(stderr, "malloc of workqueue entry failed\n");
+                        die();
+                      } /*if*/
+                    context->request = dbus_message_ref(message);
+                    context->valtype = signature[0];
+                    context->limit = limit;
+                    pthread_t child;
+                    const int err = pthread_create
+                      (
+                        /*thread =*/ &child,
+                        /*attr =*/ NULL,
+                        /*start_routine =*/ compute_primes,
+                        /*arg =*/ context
+                      );
+                    if (err == 0)
+                      {
+                        fprintf(stderr, "child thread %d created.\n", child);
+                      }
+                    else
+                      {
+                        fprintf(stderr, "error %d creating thread: %s\n", err, strerror(err));
+                        die();
+                      } /*if*/
+                  } /*if*/
+              }
+            else
+              {
+                handled = false;
+              } /*if*/
           }
         else
           {
@@ -351,7 +600,7 @@ int main
         if (sts != DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER)
           {
             fprintf(stderr, "unexpected reply code %d trying to register name\n", sts);
-            exit(2);
+            die();
           } /*if*/
       }
       {
@@ -367,7 +616,7 @@ int main
         if (!ok)
           {
             fprintf(stderr, "dbus_connection_set_watch_functions failure\n");
-            exit(2);
+            die();
           } /*if*/
       }
       {
@@ -383,7 +632,7 @@ int main
         if (!ok)
           {
             fprintf(stderr, "dbus_connection_set_timeout_functions failure\n");
-            exit(2);
+            die();
           } /*if*/
       }
       {
@@ -397,8 +646,18 @@ int main
         if (!ok)
           {
             fprintf(stderr, "dbus_connection_add_filter failure\n");
-            exit(2);
+            die();
           } /*if*/
+      }
+      {
+        int pipefd[2];
+        const int sts = pipe(pipefd);
+        if (sts != 0)
+          {
+            perror("creating notification pipes");
+          } /*if*/
+        notify_receive_pipe = pipefd[0];
+        notify_send_pipe = pipefd[1];
       }
     do
       {
