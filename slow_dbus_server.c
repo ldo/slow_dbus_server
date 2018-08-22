@@ -18,6 +18,7 @@
 #include <poll.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 #include <stdio.h>
 #include <dbus/dbus.h>
 
@@ -61,7 +62,7 @@ static bool
     quitting = false;
 
 enum
-  {
+  { /* should be enough for my simple app */
     MAX_WATCHES = 3,
     MAX_TIMEOUTS = 3,
   };
@@ -198,24 +199,6 @@ static void toggle_timeout
       } /*if*/
   } /*toggle_timeout*/
 
-static DBusHandlerResult handle_message
-  (
-    DBusConnection * conn,
-    DBusMessage * message,
-    void * _
-  )
-  {
-    bool handled;
-    const char * const path = dbus_message_get_path(message);
-    const char * const interface = dbus_message_get_interface(message);
-    const char * const member = dbus_message_get_member(message);
-    fprintf(stderr, "message received of type %d, path %s, interface %s, member %s\n", dbus_message_get_type(message), path, interface, member); /* debug */
-  /* more TBD */
-    handled = true;
-    return
-        handled ? DBUS_HANDLER_RESULT_HANDLED : DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-  } /*handle_message*/
-
 static void handle_event(void)
   {
     struct pollfd topoll[MAX_WATCHES];
@@ -312,7 +295,39 @@ static void handle_event(void)
 */
 
 static const char *
-    my_bus_name = "com.example.slow_server";
+    const my_bus_name = "com.example.slow_server";
+static const char *
+    const my_interface_name = my_bus_name;
+
+static DBusHandlerResult handle_message
+  (
+    DBusConnection * conn,
+    DBusMessage * message,
+    void * _
+  )
+  {
+    bool handled = false; /* initial assumption */
+    const char * const path = dbus_message_get_path(message);
+    const char * const interface = dbus_message_get_interface(message);
+    const char * const member = dbus_message_get_member(message);
+    fprintf(stderr, "message received of type %d, path %s, interface %s, member %s\n", dbus_message_get_type(message), path, interface, member); /* debug */
+    if (dbus_message_get_type(message) == DBUS_MESSAGE_TYPE_METHOD_CALL && strcmp(interface, my_interface_name) == 0)
+      {
+        fprintf(stderr, "matches my interface\n");
+        handled = true; /* next assumption */
+        if (strcmp(member, "quit") == 0)
+          {
+            fprintf(stderr, "quit method received\n");
+            quitting = true;
+          }
+        else
+          {
+            handled = false;
+          } /*if*/
+      } /*if*/
+    return
+        handled ? DBUS_HANDLER_RESULT_HANDLED : DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+  } /*handle_message*/
 
 int main
   (
