@@ -571,6 +571,10 @@ static DBusHandlerResult handle_message
                 bool ok;
                 DBusError dberr;
                 dbus_error_init(&dberr);
+              /* I’m being a bit lenient here, and accepting any of the unsigned
+                integer types. To conform to an introspection spec, I should pick
+                one type (the most practicable one in this case being DBUS_TYPE_UINT32)
+                and stick to it. */
                 if (signature[0] == DBUS_TYPE_BYTE)
                   {
                     unsigned char blimit;
