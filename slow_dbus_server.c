@@ -1,17 +1,46 @@
 /*
-    Example D-Bus server demonstrating how to handle
-    time-consuming CPU-intensive messages with
-    multithreading.
+    Example D-Bus server demonstrating how to handle time-consuming
+    CPU-intensive messages with multithreading.
 
     Build with a command like
 
         gcc $(pkg-config --cflags dbus-1) -o slow_dbus_server \
             slow_dbus_server.c $(pkg-config --libs dbus-1) -pthread
 
-    Copyright 2018 by Lawrence D'Oliveiro <ldo@geek-central.gen.nz>. This
-    script is licensed CC0
-    <https://creativecommons.org/publicdomain/zero/1.0/>; do with it
-    what you will.
+    Start it running, then test by sending a request like
+
+        dbus-send --session --type=method_call --print-reply \
+            --dest=com.example.slow_server / com.example.slow_server.count_primes \
+            uint32:100
+
+    to return a count of the number of primes up to 100. Try bigger limits (if
+    you are brave, how about something on the order of a million), and also
+    hitting it with multiple requests at once. With big requests, you should be
+    able to see the separate CPU-intensive threads in e.g. a “top” display (hit
+    “H” to see individual threads, and “1” to separate the load numbers for
+    different CPUs).
+
+    Note that really big numbers will likely exceed the default timeout,
+    so you will need to increase this.
+
+    This sample program doesn’t include any introspection function. But if it
+    did, the XML returned might look like this:
+
+        <node name="/">
+            <interface name="com.example.slow_server">
+                <method name="count_primes">
+                    <arg name="limit" type="u" direction="in"/>
+                    <arg name="result" type="u" direction="out"/>
+                </method>
+                <method name="quit">
+                    <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+                </method>
+            </interface>
+        </node>
+
+    Copyright 2018 by Lawrence D'Oliveiro <ldo@geek-central.gen.nz>. This script
+    is licensed CC0 <https://creativecommons.org/publicdomain/zero/1.0/>; do
+    with it what you will.
 */
 
 #include <stdbool.h>
@@ -61,9 +90,12 @@ static void check_dbus_error
 */
 
 static int
+  /* the two ends of the pipe used to receive termination notifications
+    from child worker threads */
     notify_send_pipe,
     notify_receive_pipe;
 struct workqueue_entry
+  /* for passing work to, and receiving results from, child worker threads */
   {
     struct workqueue_entry * next;
     DBusMessage * request;
@@ -71,10 +103,12 @@ struct workqueue_entry
     unsigned long limit, result;
   };
 static struct workqueue_entry
+  /* completed work entries */
     *finished = NULL,
     *finished_last = NULL;
 static pthread_mutex_t
     workqueue_mutex = PTHREAD_MUTEX_INITIALIZER;
+      /* for synchronizing access to finished queue */
 
 /*
     Event-loop handling
@@ -92,10 +126,11 @@ enum
   };
 
 static DBusWatch *
-    watches[MAX_WATCHES];
+    watches[MAX_WATCHES]; /* file descriptors libdbus wants me to watch */
 static DBusTimeout *
-    timeouts[MAX_TIMEOUTS];
+    timeouts[MAX_TIMEOUTS]; /* timeouts libdbus wants me to keep track of */
 static int
+  /* elements used in above arrays */
     nr_watches = 0,
     nr_timeouts = 0;
 
@@ -224,6 +259,7 @@ static void toggle_timeout
   } /*toggle_timeout*/
 
 static void handle_event(void)
+  /* runs a single iteration of my event loop. */
   {
     struct pollfd topoll[MAX_WATCHES + 1];
     int total_timeout = -1; /* to begin with */
@@ -280,6 +316,7 @@ static void handle_event(void)
         struct pollfd * const entry = topoll + i;
         if (entry->revents != 0)
           {
+          /* I/O notification for libdbus */
             unsigned int flags =
                     ((entry->revents & POLLIN) != 0 ? DBUS_WATCH_READABLE : 0)
                 |
@@ -298,8 +335,10 @@ static void handle_event(void)
         struct pollfd * const entry = topoll + nr_watches;
         if ((entry->revents & POLLIN) != 0)
           {
+          /* results received from one or more child threads */
             char dummy[20];
             read(notify_receive_pipe, dummy, sizeof dummy);
+              /* doesn’t matter how much I read, or even what it is */
               {
                 const int sts = pthread_mutex_lock(&workqueue_mutex);
                 if (sts != 0)
@@ -388,6 +427,7 @@ static void handle_event(void)
       } /*for*/
     if (got_io)
       {
+      /* if I/O was done, then there may be one or more complete messages received */
         for (;;)
           {
             const DBusDispatchStatus sts = dbus_connection_dispatch(conn);
@@ -410,6 +450,10 @@ static void * compute_primes
   (
     void * data
   )
+  /* worker thread routine that can take quite a lot of CPU time to compute its
+    result. Given a positive limit integer, it counts up how many prime numbers
+    are less than or equal to the limit, using a deliberately naïve and slow
+    algorithm. */
   {
     struct workqueue_entry * const context = (struct workqueue_entry *)data;
       {
@@ -425,11 +469,14 @@ static void * compute_primes
               {
                 if (i / j < j)
                   {
+                  /* if there are no factors of n ≤ sqrt(n), then there will
+                    be no factors > sqrt(n) */
                     is_prime = true;
                     break;
                   } /*if*/
                 if (i % j == 0)
                   {
+                  /* found a factor */
                     is_prime = false;
                     break;
                   } /*if*/
@@ -444,6 +491,7 @@ static void * compute_primes
           } /*for*/
         context->result = result;
       }
+    /* return my results */
       {
         const int sts = pthread_mutex_lock(&workqueue_mutex);
         if (sts != 0)
@@ -466,6 +514,7 @@ static void * compute_primes
       { /* wake up mainline */
         unsigned char buf = 0;
         write(notify_send_pipe, &buf, 1);
+          /* ignoring error on write, because it would only be a minor hiccup */
       }
     return
         NULL;
@@ -480,6 +529,12 @@ static const char *
 static const char *
     const my_interface_name = my_bus_name;
 
+/*
+    libdbus offers a number of different ways of picking up incoming
+    D-Bus messages: vtable handlers, message filters, or the
+    pop/borrow-message calls. Here I use a message filter.
+*/
+
 static DBusHandlerResult handle_message
   (
     DBusConnection * conn,
@@ -493,7 +548,12 @@ static DBusHandlerResult handle_message
     const char * const member = dbus_message_get_member(message);
     const char * const signature = dbus_message_get_signature(message);
     fprintf(stderr, "message received of type %d, path %s, interface %s, member %s, signature %s\n", dbus_message_get_type(message), path, interface, member, signature); /* debug */
-    if (dbus_message_get_type(message) == DBUS_MESSAGE_TYPE_METHOD_CALL && strcmp(interface, my_interface_name) == 0)
+    if
+      (
+            dbus_message_get_type(message) == DBUS_MESSAGE_TYPE_METHOD_CALL
+        &&
+            strcmp(interface, my_interface_name) == 0
+      )
       {
         fprintf(stderr, "matches my interface\n");
         handled = true; /* next assumption */
@@ -565,6 +625,8 @@ static DBusHandlerResult handle_message
                         die();
                       } /*if*/
                   } /*if*/
+              /* dbus_error_free(&dberr); */
+                  /* not needed, because I die on error */
               }
             else
               {
@@ -666,6 +728,7 @@ int main
         handle_event();
       }
     while (!quitting);
+      /* note I don’t bother waiting for any threads to finish! */
     fprintf(stderr, "quitting.\n");
     return
         0;
