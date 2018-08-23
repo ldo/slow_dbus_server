@@ -370,6 +370,8 @@ static void handle_event(void)
                         die();
                       } /*if*/
                   }
+                dbus_message_unref(reply);
+                dbus_message_unref(entry->request);
                 free(entry);
               } /*for*/
             pthread_mutex_unlock(&workqueue_mutex);
