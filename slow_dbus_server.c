@@ -421,14 +421,14 @@ static void * compute_primes
             bool is_prime;
             for (unsigned long j = 2;;)
               {
-                if (i % j == 0)
-                  {
-                    is_prime = false;
-                    break;
-                  } /*if*/
                 if (i / j < j)
                   {
                     is_prime = true;
+                    break;
+                  } /*if*/
+                if (i % j == 0)
+                  {
+                    is_prime = false;
                     break;
                   } /*if*/
                 ++j;
