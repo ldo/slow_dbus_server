@@ -651,6 +651,8 @@ int main
   {
     DBusError dberr;
     dbus_error_init(&dberr);
+  /* dbus_threads_init_default(); */
+      /* no need, because all my libdbus calls are confined to the main thread */
     conn = dbus_bus_get(DBUS_BUS_SESSION, &dberr);
     check_dbus_error(&dberr, "getting bus connection");
       {
