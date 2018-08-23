@@ -361,7 +361,7 @@ static void handle_event(void)
                     const int err = pthread_join(entry->worker, NULL);
                     if (err != 0)
                       {
-                        fprintf(stderr, "error %d jointing thread %d: %s\n", err, entry->worker, strerror(err));
+                        fprintf(stderr, "error %d joining thread %d: %s\n", err, entry->worker, strerror(err));
                         die();
                       } /*if*/
                   }
