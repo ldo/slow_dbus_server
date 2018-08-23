@@ -102,6 +102,7 @@ struct workqueue_entry
     DBusMessage * request;
     int valtype;
     unsigned long limit, result;
+    pthread_t worker; /* for join call */
   };
 static struct workqueue_entry
   /* completed work entries */
@@ -356,6 +357,14 @@ static void handle_event(void)
                     break;
                   } /*if*/
                 finished = finished->next;
+                  {
+                    const int err = pthread_join(entry->worker, NULL);
+                    if (err != 0)
+                      {
+                        fprintf(stderr, "error %d jointing thread %d: %s\n", err, strerror(err), entry->worker);
+                        die();
+                      } /*if*/
+                  }
                 DBusMessage * const reply = dbus_message_new_method_return(entry->request);
                 if (reply == NULL)
                   {
@@ -612,17 +621,16 @@ static DBusHandlerResult handle_message
                     context->request = dbus_message_ref(message);
                     context->valtype = signature[0];
                     context->limit = limit;
-                    pthread_t child;
                     const int err = pthread_create
                       (
-                        /*thread =*/ &child,
+                        /*thread =*/ &context->worker,
                         /*attr =*/ NULL,
                         /*start_routine =*/ compute_primes,
                         /*arg =*/ context
                       );
                     if (err == 0)
                       {
-                        fprintf(stderr, "child thread %d created.\n", child);
+                        fprintf(stderr, "child thread %d created.\n", context->worker);
                       }
                     else
                       {
