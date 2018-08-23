@@ -44,6 +44,7 @@
 */
 
 #include <stdbool.h>
+#include <iso646.h>
 #include <time.h>
 #include <poll.h>
 #include <pthread.h>
@@ -293,7 +294,7 @@ static void handle_event(void)
         if (dbus_timeout_get_enabled(timeout))
           {
             const int interval = dbus_timeout_get_interval(timeout);
-            if (total_timeout < 0 || total_timeout > interval)
+            if (total_timeout < 0 or total_timeout > interval)
               {
                 total_timeout = interval;
               } /*if*/
@@ -324,7 +325,7 @@ static void handle_event(void)
                 |
                     ((entry->revents & POLLERR) != 0 ? DBUS_WATCH_ERROR : 0);
             const bool ok = dbus_watch_handle(watches[i], flags);
-            if (!ok)
+            if (not ok)
               {
                 fprintf(stderr, "dbus_watch_handle failure\n");
                 die();
@@ -395,7 +396,7 @@ static void handle_event(void)
                         entry->valtype, argptr,
                         DBUS_TYPE_INVALID /* marks end of args */
                       );
-                    if (!ok)
+                    if (not ok)
                       {
                         fprintf(stderr, "dbus_message_append_args failure\n");
                         die();
@@ -403,7 +404,7 @@ static void handle_event(void)
                   }
                   {
                     const bool ok = dbus_connection_send(conn, reply, NULL);
-                    if (!ok)
+                    if (not ok)
                       {
                         fprintf(stderr, "dbus_message_send failure\n");
                         die();
@@ -420,7 +421,7 @@ static void handle_event(void)
     for (int i = 0; i < nr_timeouts; ++i)
       {
         DBusTimeout * const timeout = timeouts[i];
-        if (dbus_timeout_get_enabled(timeout) && dbus_timeout_get_interval(timeout) > interval)
+        if (dbus_timeout_get_enabled(timeout) and dbus_timeout_get_interval(timeout) > interval)
           {
             const bool ignore = dbus_timeout_handle(timeout);
           } /*if*/
@@ -551,7 +552,7 @@ static DBusHandlerResult handle_message
     if
       (
             dbus_message_get_type(message) == DBUS_MESSAGE_TYPE_METHOD_CALL
-        &&
+        and
             strcmp(interface, my_interface_name) == 0
       )
       {
@@ -677,7 +678,7 @@ int main
             /*data =*/ NULL,
             /*free_data_function =*/ NULL
           );
-        if (!ok)
+        if (not ok)
           {
             fprintf(stderr, "dbus_connection_set_watch_functions failure\n");
             die();
@@ -693,7 +694,7 @@ int main
             /*data =*/ NULL,
             /*free_data_function =*/ NULL
           );
-        if (!ok)
+        if (not ok)
           {
             fprintf(stderr, "dbus_connection_set_timeout_functions failure\n");
             die();
@@ -707,7 +708,7 @@ int main
             /*user_data =*/ NULL,
             /*free_data_function =*/ NULL
           );
-        if (!ok)
+        if (not ok)
           {
             fprintf(stderr, "dbus_connection_add_filter failure\n");
             die();
@@ -727,7 +728,7 @@ int main
       {
         handle_event();
       }
-    while (!quitting);
+    while (not quitting);
       /* note I don’t bother waiting for any threads to finish! */
     fprintf(stderr, "quitting.\n");
     return
