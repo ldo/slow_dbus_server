@@ -513,16 +513,15 @@ static void * compute_primes
     if (finished == NULL)
       {
         finished = context;
-        finished_last = context;
       }
     else
       {
         finished_last->next = context;
-        finished_last = context;
       } /*if*/
+    finished_last = context;
     pthread_mutex_unlock(&workqueue_mutex);
       { /* wake up mainline */
-        unsigned char buf = 0;
+        const unsigned char buf = 0;
         write(notify_send_pipe, &buf, 1);
           /* ignoring error on write, because it would only be a minor hiccup */
       }
