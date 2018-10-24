@@ -38,7 +38,7 @@
             </interface>
         </node>
 
-    Copyright 2018 by Lawrence D'Oliveiro <ldo@geek-central.gen.nz>. This script
+    Copyright 2018 by Lawrence D'Oliveiro <ldo@geek-central.gen.nz>. This code
     is licensed CC0 <https://creativecommons.org/publicdomain/zero/1.0/>; do
     with it what you will.
 */
