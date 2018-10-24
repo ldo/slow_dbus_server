@@ -372,37 +372,11 @@ static void handle_event(void)
                     die();
                   } /*if*/
                   {
-                  /* return same type as was passed */
-                    unsigned char bresult;
-                    unsigned short wresult;
-                    unsigned int iresult;
-                    const void * argptr;
-                    switch (entry->valtype)
-                      {
-                    case DBUS_TYPE_BYTE:
-                        bresult = entry->result;
-                        argptr = &bresult;
-                    break;
-                    case DBUS_TYPE_UINT16:
-                        wresult = entry->result;
-                        argptr = &wresult;
-                    break;
-                    case DBUS_TYPE_UINT32:
-                        iresult = entry->result;
-                        argptr = &iresult;
-                    break;
-                    case DBUS_TYPE_UINT64:
-                        argptr = &entry->result;
-                    break;
-                    default:
-                        fprintf(stderr, "SHOULDN’T OCCUR: arg valtype = %d\n", entry->valtype);
-                        die();
-                    break;
-                      } /*switch*/
+                    const unsigned int iresult = entry->result;
                     const bool ok = dbus_message_append_args
                       (
                         reply,
-                        entry->valtype, argptr,
+                        DBUS_TYPE_UINT32, &iresult,
                         DBUS_TYPE_INVALID /* marks end of args */
                       );
                     if (not ok)
@@ -579,31 +553,11 @@ static DBusHandlerResult handle_message
                 bool ok;
                 DBusError dberr;
                 dbus_error_init(&dberr);
-              /* I’m being a bit lenient here, and accepting any of the unsigned
-                integer types. To conform to an introspection spec, I should pick
-                one type (the most practicable one in this case being DBUS_TYPE_UINT32)
-                and stick to it. */
-                if (signature[0] == DBUS_TYPE_BYTE)
-                  {
-                    unsigned char blimit;
-                    ok = dbus_message_get_args(message, &dberr, DBUS_TYPE_BYTE, &blimit);
-                    limit = blimit;
-                  }
-                else if (signature[0] == DBUS_TYPE_UINT16)
-                  {
-                    unsigned short wlimit;
-                    ok = dbus_message_get_args(message, &dberr, DBUS_TYPE_UINT16, &wlimit);
-                    limit = wlimit;
-                  }
-                else if (signature[0] == DBUS_TYPE_UINT32)
+                if (signature[0] == DBUS_TYPE_UINT32)
                   {
                     unsigned int ilimit;
                     ok = dbus_message_get_args(message, &dberr, DBUS_TYPE_UINT32, &ilimit);
                     limit = ilimit;
-                  }
-                else if (signature[0] == DBUS_TYPE_UINT64)
-                  {
-                    ok = dbus_message_get_args(message, &dberr, DBUS_TYPE_UINT64, &limit);
                   }
                 else
                   {
