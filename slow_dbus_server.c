@@ -100,7 +100,7 @@ struct workqueue_entry
   {
     struct workqueue_entry * next;
     DBusMessage * request;
-    unsigned long limit, result;
+    unsigned int limit, result;
     pthread_t worker; /* for join call */
   };
 static struct workqueue_entry
@@ -440,15 +440,15 @@ static void * compute_primes
   {
     struct workqueue_entry * const context = (struct workqueue_entry *)data;
       {
-        const unsigned long limit = context->limit;
-        unsigned long result = 0;
-        unsigned long step = 1;
-        for (unsigned long i = 2;;)
+        const unsigned int limit = context->limit;
+        unsigned int result = 0;
+        unsigned int step = 1;
+        for (unsigned int i = 2;;)
           {
             if (i > limit)
                 break;
             bool is_prime;
-            for (unsigned long j = 2;;)
+            for (unsigned int j = 2;;)
               {
                 if (i / j < j)
                   {
@@ -548,7 +548,7 @@ static DBusHandlerResult handle_message
           {
             if (strlen(signature) == 1)
               {
-                unsigned long limit;
+                unsigned int limit;
                 bool ok;
                 DBusError dberr;
                 dbus_error_init(&dberr);
