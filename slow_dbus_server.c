@@ -503,6 +503,93 @@ static void * compute_primes
   } /*compute_primes*/
 
 /*
+    D-Bus Message Handlers
+*/
+
+static DBusHandlerResult handle_quit
+  (
+    DBusConnection * conn,
+    DBusMessage * message,
+    void * _
+  )
+  /* handles a request to quit the server. */
+  {
+    fprintf(stderr, "quitting\n");
+    quitting = true;
+    return
+        DBUS_HANDLER_RESULT_HANDLED;
+  } /*handle_quit*/
+
+static DBusHandlerResult handle_count_primes
+  (
+    DBusConnection * conn,
+    DBusMessage * message,
+    void * _
+  )
+  /* handles a request to count primes up to some limit. Creates a separate thread
+    to compute the actual count. */
+  {
+    unsigned int limit;
+      {
+        DBusError dberr;
+        dbus_error_init(&dberr);
+        const bool ok = dbus_message_get_args
+          (
+            message, &dberr,
+            DBUS_TYPE_UINT32, &limit,
+            DBUS_TYPE_INVALID
+          );
+        if (not ok)
+          {
+            fprintf(stderr, "error getting count_primes message arg: %s\n", dberr.message);
+            die();
+          } /*if*/
+      /* dbus_error_free(&dberr); */
+          /* not needed, because I die on error */
+      }
+    struct workqueue_entry * context = (struct workqueue_entry *)malloc(sizeof(struct workqueue_entry));
+    if (context == NULL)
+      {
+        fprintf(stderr, "malloc of workqueue entry failed\n");
+        die();
+      } /*if*/
+    context->request = dbus_message_ref(message);
+    context->limit = limit;
+    const int err = pthread_create
+      (
+        /*thread =*/ &context->worker,
+        /*attr =*/ NULL,
+        /*start_routine =*/ compute_primes,
+        /*arg =*/ context
+      );
+    if (err == 0)
+      {
+        fprintf(stderr, "child thread %d created.\n", context->worker);
+      }
+    else
+      {
+        fprintf(stderr, "error %d creating thread: %s\n", err, strerror(err));
+        die();
+      } /*if*/
+    return
+        DBUS_HANDLER_RESULT_HANDLED;
+  } /*handle_count_primes*/
+
+struct method_entry
+  {
+    const char * name; /* method name, or NULL to mark end of list */
+    const char * signature;
+    DBusHandleMessageFunction action;
+  } /*method_entry*/;
+/* simple linear table of method handlers for this example */
+const struct method_entry methods[] =
+    {
+        {"quit", "", handle_quit},
+        {"count_primes", "u", handle_count_primes},
+        {NULL, NULL, NULL} /* must be last */
+    };
+
+/*
     Mainline
 */
 
@@ -524,7 +611,7 @@ static DBusHandlerResult handle_message
     void * _
   )
   {
-    bool handled = false; /* initial assumption */
+    DBusHandlerResult result;
     const char * const path = dbus_message_get_path(message);
     const char * const interface = dbus_message_get_interface(message);
     const char * const member = dbus_message_get_member(message);
@@ -538,74 +625,53 @@ static DBusHandlerResult handle_message
       )
       {
         fprintf(stderr, "matches my interface\n");
-        handled = true; /* next assumption */
-        if (strcmp(member, "quit") == 0)
+        for (const struct method_entry * method = methods;;)
           {
-            fprintf(stderr, "quit method received\n");
-            quitting = true;
-          }
-        else if (strcmp(member, "count_primes") == 0)
-          {
-            if (strlen(signature) == 1)
+            if (method->name == NULL)
               {
-                unsigned int limit;
-                DBusError dberr;
-                dbus_error_init(&dberr);
-                if (signature[0] == DBUS_TYPE_UINT32)
+                result = DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+                break;
+              } /*if*/
+            if (strcmp(method->name, member) == 0)
+              {
+                if (strcmp(method->signature, signature) == 0)
                   {
-                    const bool ok = dbus_message_get_args(message, &dberr, DBUS_TYPE_UINT32, &limit, DBUS_TYPE_INVALID);
-                    if (not ok)
-                      {
-                        fprintf(stderr, "error getting count_primes message arg: %s\n", dberr.message);
-                        die();
-                      } /*if*/
+                    result = method->action(conn, message, NULL);
+                    break;
                   }
                 else
                   {
-                    handled = false;
-                  } /*if*/
-                if (handled)
-                  {
-                    struct workqueue_entry * context = (struct workqueue_entry *)malloc(sizeof(struct workqueue_entry));
-                    if (context == NULL)
-                      {
-                        fprintf(stderr, "malloc of workqueue entry failed\n");
-                        die();
-                      } /*if*/
-                    context->request = dbus_message_ref(message);
-                    context->limit = limit;
-                    const int err = pthread_create
+                    result = DBUS_HANDLER_RESULT_HANDLED;
+                    DBusMessage * const reply = dbus_message_new_error
                       (
-                        /*thread =*/ &context->worker,
-                        /*attr =*/ NULL,
-                        /*start_routine =*/ compute_primes,
-                        /*arg =*/ context
+                        /*reply_to =*/ message,
+                        /*error_name =*/ DBUS_ERROR_INVALID_ARGS,
+                        /*error_message =*/ "message arguments do not match expected signature"
                       );
-                    if (err == 0)
+                    if (reply == NULL)
                       {
-                        fprintf(stderr, "child thread %d created.\n", context->worker);
-                      }
-                    else
-                      {
-                        fprintf(stderr, "error %d creating thread: %s\n", err, strerror(err));
+                        fprintf(stderr, "failed to allocate D-Bus error reply message\n");
                         die();
                       } /*if*/
+                    const bool ok = dbus_connection_send(conn, reply, NULL);
+                    if (not ok)
+                      {
+                        fprintf(stderr, "dbus_message_send failure on error return\n");
+                        die();
+                      } /*if*/
+                    dbus_message_unref(reply);
                   } /*if*/
-              /* dbus_error_free(&dberr); */
-                  /* not needed, because I die on error */
-              }
-            else
-              {
-                handled = false;
+                break;
               } /*if*/
-          }
-        else
-          {
-            handled = false;
-          } /*if*/
+            ++method;
+          } /*for*/
+      }
+    else
+      {
+        result = DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
       } /*if*/
     return
-        handled ? DBUS_HANDLER_RESULT_HANDLED : DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+        result;
   } /*handle_message*/
 
 int main
