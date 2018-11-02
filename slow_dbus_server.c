@@ -100,7 +100,6 @@ struct workqueue_entry
   {
     struct workqueue_entry * next;
     DBusMessage * request;
-    int valtype;
     unsigned long limit, result;
     pthread_t worker; /* for join call */
   };
@@ -572,7 +571,6 @@ static DBusHandlerResult handle_message
                         die();
                       } /*if*/
                     context->request = dbus_message_ref(message);
-                    context->valtype = signature[0];
                     context->limit = limit;
                     const int err = pthread_create
                       (
