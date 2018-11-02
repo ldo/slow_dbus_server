@@ -549,14 +549,16 @@ static DBusHandlerResult handle_message
             if (strlen(signature) == 1)
               {
                 unsigned int limit;
-                bool ok;
                 DBusError dberr;
                 dbus_error_init(&dberr);
                 if (signature[0] == DBUS_TYPE_UINT32)
                   {
-                    unsigned int ilimit;
-                    ok = dbus_message_get_args(message, &dberr, DBUS_TYPE_UINT32, &ilimit);
-                    limit = ilimit;
+                    const bool ok = dbus_message_get_args(message, &dberr, DBUS_TYPE_UINT32, &limit, DBUS_TYPE_INVALID);
+                    if (not ok)
+                      {
+                        fprintf(stderr, "error getting count_primes message arg: %s\n", dberr.message);
+                        die();
+                      } /*if*/
                   }
                 else
                   {
